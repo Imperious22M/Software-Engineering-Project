@@ -1,111 +1,268 @@
-// This is a small program for simulating Conway's Game of Life
-// on a HUB75 32x64 LED matrix on a Raspberry Pi Pico
-// Requires the maxgerhardt Arduino core for this
-// project to work in PlatformIO. 
-// We will be using Adafruit's Protomatter library and 
-// their GFX library for this project.
-#include <Arduino.h>
-#include <Adafruit_Protomatter.h>
-#include "simulation.h"
-
-// C definitions for the LED matrix and the simulation
-#define matrix_chain_width 64 // total matrix chain width (width of the array)
-#define bit_depth 4 // Number of bit depth of the color plane, higher = greater color fidelity
-#define address_lines_num 4 // Number of address lines of the LED matrix
-#define double_buffered true // Makes animation smother if true, at the cost of twice the RAM usage
-// See Adafruits documentation for more details
-
-
-
-// Arrays for the Raspberry Pi pinouts.
-// These are in GP number format, which is different from
-// the silkscreen numbers, please see a pinout diagram.
-// Adafruit has wonderful documentation on the pin layout
-// of the LCD matrix.
-// See: https://learn.adafruit.com/32x16-32x32-rgb-led-matrix/connecting-with-jumper-wires
-// NOTE: If you are using the ribbon cable to connect, pins are mirrored relative
-// to their order on the PCB in the Y axis. Please see Adafruit documentation
-// for further details.
-uint8_t rgbPins[]  = {0, 1, 2, 3, 4, 5}; //LED matrix: R1, G1, B1, R2, G2, B2
-uint8_t addrPins[] = {6, 7, 8, 9}; // LED matrix: A,B,C,D
-uint8_t clockPin   = 11; // LED matrix: CLK
-uint8_t latchPin   = 12; // LED matrix: LAT
-uint8_t oePin      = 13; // LED matrix: OE
-uint8_t powerButton = 14; // GPIO of the power button
-uint8_t modeButton = 15; // GPIO of the mode button
-// GPIO 26 is unconnected and used as the seed for randomInit()
-
-// Simulation variables
-uint8_t rgbSimColor[] = {125,76,0}; // Custom color for the simulation
-const uint32_t refreshRate = 1000; // refresh rate of the simulation in milliseconds
-uint32_t oldTime = millis(); // timer used for refreshing the matrix
-uint32_t cellsUpdated = 0; // Used as a reset measure if the pattern becomes "static"
-const uint32_t updateThreshold = 35; // Sets the minimum amount of cells we need to update to keep the simulation going.
-
-// For details on the constructor arguments please see:
-// https://learn.adafruit.com/adafruit-matrixportal-m4/protomatter-arduino-library
-Adafruit_Protomatter matrix(
-  matrix_chain_width, bit_depth, 1, rgbPins, 
-  address_lines_num, addrPins, clockPin, latchPin, 
-  oePin, double_buffered);
-
-// Initialize the simulation
-ConwaysGame simulation(
-  &matrix,
-  matrix.color565(rgbSimColor[0],rgbSimColor[1],rgbSimColor[2]));
-
-// Initial setup
-void setup(void) {
-
-  Serial.begin(9600);
-  pinMode(26,INPUT); // Set unconnected GPIO26 (ADC0) as input for random seed if needed
-  pinMode(powerButton,INPUT);
-  pinMode(modeButton,INPUT);
+/*
+ * This program attempts to initialize an SD card and analyze its structure.
+ */
+#include "SdFat.h"
+#include "sdios.h"
+/*
+  Set DISABLE_CS_PIN to disable a second SPI device.
+  For example, with the Ethernet shield, set DISABLE_CS_PIN
+  to 10 to disable the Ethernet controller.
+*/
+const int8_t DISABLE_CS_PIN = -1;
+/*
+  Change the value of SD_CS_PIN if you are using SPI
+  and your hardware does not use the default value, SS.
+  Common values are:
+  Arduino Ethernet shield: pin 4
+  Sparkfun SD shield: pin 8
+  Adafruit SD shields and modules: pin 10
+*/
+// SDCARD_SS_PIN is defined for the built-in SD on some boards.
+// TODO: Define this explicvitl
+const uint8_t SD_CS_PIN = 17; // For our board, this is the correct definition 
 
 
-  // Initialize matrix...
-  ProtomatterStatus status = matrix.begin();
-  Serial.print("Protomatter begin() status: ");
-  Serial.println((int)status);
-  if(status == PROTOMATTER_ERR_PINS) {
-    while(true){
-      Serial.println("RGB and clock pins are not on the same PORT!\n");
-    }
-  }else if(status != PROTOMATTER_OK){
-    while(true){
-      // If we get here, please see:
-      // https://learn.adafruit.com/adafruit-matrixportal-m4/protomatter-arduino-library
-      // for error state definitions and troubleshooting info
-      Serial.println("Error initializing the matrix!");
-    }
+
+// Try to select the best SD card configuration.
+#if HAS_SDIO_CLASS
+#define SD_CONFIG SdioConfig(FIFO_SDIO)
+#elif ENABLE_DEDICATED_SPI
+#define SD_CONFIG SdSpiConfig(SD_CS_PIN, DEDICATED_SPI, SD_SCK_MHZ(16))
+#else  // HAS_SDIO_CLASS
+#define SD_CONFIG SdSpiConfig(SD_CS_PIN, SHARED_SPI, SD_SCK_MHZ(16))
+#endif  // HAS_SDIO_CLASS
+
+//------------------------------------------------------------------------------
+SdFs sd;
+cid_t cid;
+csd_t csd;
+scr_t scr;
+uint8_t cmd6Data[64];
+uint32_t eraseSize;
+uint32_t ocr;
+static ArduinoOutStream cout(Serial);
+//------------------------------------------------------------------------------
+void cidDmp() {
+  cout << F("\nManufacturer ID: ");
+  cout << uppercase << showbase << hex << int(cid.mid) << dec << endl;
+  cout << F("OEM ID: ") << cid.oid[0] << cid.oid[1] << endl;
+  cout << F("Product: ");
+  for (uint8_t i = 0; i < 5; i++) {
+    cout << cid.pnm[i];
   }
-
-  // Any function that has color must use matrix.color(uint8_t r,g,b) call to obtain a
-  //16-bit integer with the desired color, which is passed as the color argument.
-  matrix.setTextSize(1);
-  matrix.println("Conway's \nGame \nof \nLife."); // Default text color is white
-
-  // AFTER DRAWING, A show() CALL IS REQUIRED TO UPDATE THE MATRIX!
-  matrix.show(); // Copy data to matrix buffers
-
-  delay(5000);
-  // Start the simulation by drawing the initial seed
-  // and loading it into the screen.
-  simulation.initSeed(true); // do  random pattern every startup
-  simulation.drawCurGen();
-  matrix.show();
-  delay(2000);
+  cout << F("\nRevision: ") << cid.prvN() << '.' << cid.prvM() << endl;
+  cout << F("Serial number: ") << hex << cid.psn() << dec << endl;
+  cout << F("Manufacturing date: ");
+  cout << cid.mdtMonth() << '/' << cid.mdtYear() << endl;
+  cout << endl;
 }
+//------------------------------------------------------------------------------
+void clearSerialInput() {
+  uint32_t m = micros();
+  do {
+    if (Serial.read() >= 0) {
+      m = micros();
+    }
+  } while (micros() - m < 10000);
+}
+//------------------------------------------------------------------------------
+void csdDmp() {
+  eraseSize = csd.eraseSize();
+  cout << F("cardSize: ") << 0.000512 * csd.capacity();
+  cout << F(" MB (MB = 1,000,000 bytes)\n");
 
-// Run simulation forever
-void loop(void) {
-  // Run the simulation every 100 ms and show it in the matrix
-  // This code can be vastly improved, but for now it serves its purpose.
-  if(cellsUpdated<=updateThreshold){ // If there isn't enough activity in the simulation, make a new random pattern
-    simulation.initSeed(true); // do  random pattern every startup
+  cout << F("flashEraseSize: ") << int(eraseSize) << F(" blocks\n");
+  cout << F("eraseSingleBlock: ");
+  if (csd.eraseSingleBlock()) {
+    cout << F("true\n");
+  } else {
+    cout << F("false\n");
   }
-  cellsUpdated = simulation.calcNextGen();
-  simulation.drawCurGen();
-  matrix.show();
-  delay(100); // Ideally should be a non-blocking millis timer
+  cout << F("dataAfterErase: ");
+  if (scr.dataAfterErase()) {
+    cout << F("ones\n");
+  } else {
+    cout << F("zeros\n");
+  }
+}
+//------------------------------------------------------------------------------
+void errorPrint() {
+  if (sd.sdErrorCode()) {
+    cout << F("SD errorCode: ") << hex << showbase;
+    printSdErrorSymbol(&Serial, sd.sdErrorCode());
+    cout << F(" = ") << int(sd.sdErrorCode()) << endl;
+    cout << F("SD errorData = ") << int(sd.sdErrorData()) << dec << endl;
+  }
+}
+//------------------------------------------------------------------------------
+bool mbrDmp() {
+  MbrSector_t mbr;
+  bool valid = true;
+  if (!sd.card()->readSector(0, (uint8_t*)&mbr)) {
+    cout << F("\nread MBR failed.\n");
+    errorPrint();
+    return false;
+  }
+  cout << F("\nSD Partition Table\n");
+  cout << F("part,boot,bgnCHS[3],type,endCHS[3],start,length\n");
+  for (uint8_t ip = 1; ip < 5; ip++) {
+    MbrPart_t *pt = &mbr.part[ip - 1];
+    if ((pt->boot != 0 && pt->boot != 0X80) ||
+        getLe32(pt->relativeSectors) > csd.capacity()) {
+      valid = false;
+    }
+    cout << int(ip) << ',' << uppercase << showbase << hex;
+    cout << int(pt->boot) << ',';
+    for (int i = 0; i < 3; i++ ) {
+      cout << int(pt->beginCHS[i]) << ',';
+    }
+    cout << int(pt->type) << ',';
+    for (int i = 0; i < 3; i++ ) {
+      cout << int(pt->endCHS[i]) << ',';
+    }
+    cout << dec << getLe32(pt->relativeSectors) << ',';
+    cout << getLe32(pt->totalSectors) << endl;
+  }
+  if (!valid) {
+    cout << F("\nMBR not valid, assuming Super Floppy format.\n");
+  }
+  return true;
+}
+//------------------------------------------------------------------------------
+void dmpVol() {
+  cout << F("\nScanning FAT, please wait.\n");
+  int32_t freeClusterCount = sd.freeClusterCount();
+  if (sd.fatType() <= 32) {
+    cout << F("\nVolume is FAT") << int(sd.fatType()) << endl;
+  } else {
+    cout << F("\nVolume is exFAT\n");
+  }
+  cout << F("sectorsPerCluster: ") << sd.sectorsPerCluster() << endl;
+  cout << F("fatStartSector:    ") << sd.fatStartSector() << endl;
+  cout << F("dataStartSector:   ") << sd.dataStartSector() << endl;
+  cout << F("clusterCount:      ") << sd.clusterCount() << endl;  
+  cout << F("freeClusterCount:  ");
+  if (freeClusterCount >= 0) {
+    cout << freeClusterCount << endl;
+  } else {
+    cout << F("failed\n");
+    errorPrint();    
+  }
+}
+//------------------------------------------------------------------------------
+void printCardType() {
+
+  cout << F("\nCard type: ");
+
+  switch (sd.card()->type()) {
+    case SD_CARD_TYPE_SD1:
+      cout << F("SD1\n");
+      break;
+
+    case SD_CARD_TYPE_SD2:
+      cout << F("SD2\n");
+      break;
+
+    case SD_CARD_TYPE_SDHC:
+      if (csd.capacity() < 70000000) {
+        cout << F("SDHC\n");
+      } else {
+        cout << F("SDXC\n");
+      }
+      break;
+
+    default:
+      cout << F("Unknown\n");
+  }
+}
+//------------------------------------------------------------------------------
+void printConfig(SdSpiConfig config) {
+  if (DISABLE_CS_PIN < 0) {
+    cout << F(
+           "\nAssuming the SD is the only SPI device.\n"
+           "Edit DISABLE_CS_PIN to disable an SPI device.\n");
+  } else {
+    cout << F("\nDisabling SPI device on pin ");
+    cout << int(DISABLE_CS_PIN) << endl;
+    pinMode(DISABLE_CS_PIN, OUTPUT);
+    digitalWrite(DISABLE_CS_PIN, HIGH);
+  }
+  cout << F("\nAssuming the SD chip select pin is: ") << int(config.csPin);
+  cout << F("\nEdit SD_CS_PIN to change the SD chip select pin.\n");
+}
+//------------------------------------------------------------------------------
+void printConfig(SdioConfig config) {
+  (void)config;
+  cout << F("Assuming an SDIO interface.\n");
+}
+//-----------------------------------------------------------------------------
+void setup() {
+  Serial.begin(9600);
+  // Wait for USB Serial
+  while (!Serial) {
+    yield();
+  }
+  cout << F("SdFat version: ") << SD_FAT_VERSION_STR << endl;
+  printConfig(SD_CONFIG);
+
+}
+//------------------------------------------------------------------------------
+void loop() {
+  // Read any existing Serial data.
+  clearSerialInput();
+
+  // F stores strings in flash to save RAM
+  cout << F("\ntype any character to start\n");
+  while (!Serial.available()) {
+    yield();
+  }
+  uint32_t t = millis();
+  if (!sd.cardBegin(SD_CONFIG)) {
+    cout << F(
+           "\nSD initialization failed.\n"
+           "Do not reformat the card!\n"
+           "Is the card correctly inserted?\n"
+           "Is there a wiring/soldering problem?\n");
+    if (isSpi(SD_CONFIG)) {
+      cout << F(
+           "Is SD_CS_PIN set to the correct value?\n"
+           "Does another SPI device need to be disabled?\n"
+           );
+    }
+    errorPrint();
+    return;
+  }
+  t = millis() - t;
+  cout << F("init time: ") << dec << t << " ms" << endl;
+
+  if (!sd.card()->readCID(&cid) ||
+      !sd.card()->readCSD(&csd) ||
+      !sd.card()->readOCR(&ocr) ||
+      !sd.card()->readSCR(&scr)) {
+    cout << F("readInfo failed\n");
+    errorPrint();
+    return;
+  }
+  printCardType();
+  cout << F("sdSpecVer: ") << 0.01*scr.sdSpecVer() << endl;
+  cout << F("HighSpeedMode: ");
+  if (scr.sdSpecVer() &&
+    sd.card()->cardCMD6(0X00FFFFFF, cmd6Data) && (2 & cmd6Data[13])) {
+    cout << F("true\n");
+  } else {
+    cout << F("false\n");
+  }      
+  cidDmp();
+  csdDmp();
+  cout << F("\nOCR: ") << uppercase << showbase;
+  cout << hex << ocr << dec << endl;
+  if (!mbrDmp()) {
+    return;
+  }
+  if (!sd.volumeBegin()) {
+    cout << F("\nvolumeBegin failed. Is the card formatted?\n");
+    errorPrint();
+    return;
+  }
+  dmpVol();
 }
