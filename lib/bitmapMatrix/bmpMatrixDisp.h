@@ -8,6 +8,7 @@
 #include <Adafruit_Protomatter.h>
 #include <SdFat.h> // Adafruit's Fork of SD
 #include <Adafruit_Protomatter.h>
+#include <ErrorsDefs.h> // Show the runtime errors on the matrix
 
 // Variables for decoding the BMP image
 // from the SD card and display them on the matrix
@@ -73,31 +74,30 @@ typedef union bpp8Format {
 // The SD card MUST be initialized before instantiating this class
 class bmpImageDisp{
   private:
-    SdFat32 SDCard; // The filesystem of the SD Card
+    SdFat32 *SDCard; // The filesystem of the SD Card
     File32 image;  // Bitmap file to open and display
     char buffer[100]; // Buffer to store messages to be printed out
     bool debugFlg  = false;
 
   public: 
-    bmpImageDisp(SdFat32 &SDOpen, bool debugFlg_in);
-    int imageExists(char *imgPath);
+    bmpImageDisp(SdFat32 *SDOpen, bool debugFlg_in);
+    bool imageExists(char *imgPath);
     int displayImage(char *imgPath,Adafruit_Protomatter &matrix);
 
 };
 
 // Only valid constructor for now
-bmpImageDisp::bmpImageDisp(SdFat32 &SDOpen, bool debugFlg_in){
+bmpImageDisp::bmpImageDisp(SdFat32 *SDOpen, bool debugFlg_in){
   debugFlg = debugFlg_in;
   SDCard = SDOpen;
 }
 
 // Check if the image exists, return true if it does, otherwise false.
-int bmpImageDisp::imageExists(char *imgPath){
-
-  if (!SDCard.exists(imgPath)) {
-    return true;
+bool bmpImageDisp::imageExists(char *imgPath){
+  if (!SDCard->exists(imgPath)) {
+    return false;
   }
-  return false;
+  return true;
 }
 
 // Reads the image passed and displays it on the protomatter matrix passed.
@@ -107,11 +107,13 @@ int bmpImageDisp::displayImage(char *imgPath,Adafruit_Protomatter &matrix){
 
   // Check if the file exists
   if(!imageExists(imgPath)){
-    
+    errorShow("BMP image does not exist",matrix);
     return 1;
   }
+  
   // Open the image, exist on fail
-  if(!image.open(imgPath,O_READ)){
+  if(!image.open(imgPath,O_RDONLY)){
+    errorShow("BMP image did not open!",matrix);
     return 1;
   }
 
@@ -251,14 +253,13 @@ int bmpImageDisp::displayImage(char *imgPath,Adafruit_Protomatter &matrix){
 
         }
 
-        
       }
   
   } else {
-    //errorShow("bpp not supported!",matrix);
-    return 1;
+      errorShow("bpp not supported!",matrix);
   }
 
+  image.close();
   matrix.show();
   return 0;
 }

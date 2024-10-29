@@ -46,7 +46,11 @@ uint8_t modeButton = 15; // GPIO of the mode button
 // We will be using the FAT16/FAT32 and exFAT class for higher compatibility
 SdFat32  SD;         // SD card filesystem
 File32 file;
-File32 root;
+File32 dir;
+// File locations to be used for storing files
+String animationsFilePath = "animations";
+String bitmapFilePath =  "bitmaps";
+String jpegsFilepath =  "jpegs";
 
 // SD card setup and pin definitions
 // The SD card is connected to the default SPI0 pins (16:?,17:CS,18:?,19:?)
@@ -61,7 +65,7 @@ Adafruit_Protomatter matrix(
   oePin, double_buffered);
 
 // Instantiate Bitmap reader class
-bmpImageDisp bmpImageDisplay(SD,false);
+bmpImageDisp bmpImageDisplay(&SD,false);
 
 // Create a Serial output stream.
 ArduinoOutStream cout(Serial);
@@ -96,6 +100,7 @@ void setup(void) {
   }
 
   // Initialize the SD Card with the config defined earlier
+  // If we are ever finished with the SD Card use SD.close
   if(!SD.begin(SD_CONFIG)) { 
     Serial.println(F("SD begin() failed"));
     matrix.println("SD Card Failure!");
@@ -112,29 +117,40 @@ void setup(void) {
   matrix.show();
   delay(1000);
 
-  //Testing of the SD card functionality
-  if (!SD.exists("Folder1/image.bmp")) {
-    errorShow("Image does not exist",matrix);
-  }else{
-    errorShow("Image exists!",matrix);
-  }
-
 }
 
 // Run forever!
 void loop(void) {
-  cout << F("\nList of files in the SD.\n");
   SD.ls(LS_R);
+  cout<<"\n";
 
-  // Open image file and display it
-  if (!file.open("Folder1/image2.bmp", O_READ)) {
-    cout<<"Failed to open image\n";
-  }else{
-    cout << F("Opened Image!!");
+  // Open every bitmap image in the "bitmaps" folder
+  // Open bitmaps directory
+  char strBuffer[100]; // buffer to store file paths
+  bitmapFilePath.toCharArray(strBuffer,100);
+  cout<<strBuffer<<"\n";
+  if (!dir.open(strBuffer)){
+    errorShow("Bitmap dir didn't open",matrix);
   }
-  file.close();
+  // Go through every bitmap and display it
+  while(file.openNext(&dir,O_RDONLY)){
+    // Get the file path name
+    file.getName(strBuffer,100);
+    String path = bitmapFilePath+"/"+strBuffer;
+    if(file.isDir()){
+      // We do not display directories!
+      file.close();
+      break;
+    }
 
-  bmpImageDisplay.displayImage("Folder1/image2.bmp",matrix);
-
+    file.close();
+    path.toCharArray(strBuffer,100);
+    cout<<strBuffer<<"\n";
+    bmpImageDisplay.displayImage(strBuffer,matrix);
+    
+    delay(5000);
+  }
+  
+  dir.close();
   delay(2000); 
 }
