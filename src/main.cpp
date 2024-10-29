@@ -1,37 +1,140 @@
-// A very simple Serial-over-BT app that reads input from the host and CAPITALIZES it.
-// Released to the public domain by Earle F. Philhower, III, in February 2023
-
-// Under Linux to connect to the PicoW
-// 1. Pair to the "PicoW Serial XX:XX..." device using your favorite GUI, entering a PIN of "0000"
-// 2. Execute "sudo rfcomm bind 0 00:00:00:00:00:00" to make a `/dev/rfcomm0" device, replacing the "00:00.." with the MAC as listed in the device name
-// 3. Run "minicom -D /dev/rfcomm0" and type away
-// 4. To remove the virtual serial port, execute "sudo rfcomm release rfcomm0"
-
-// Under Windows to connect to the PicoW
-// 1. Pair to the "PicoW Serial XX:XX..." device using the copntrol panel, ignoring any PIN it says to check for
-// 2. At this point you will have a new COM: port.  You may need to use the Device Manager to find it's number.
-// 3. Open up COMX: in your favorite terminal application and type away
-
-// Under Mac to connect to the PicoW
-// 1. Open System Preferences and go in the bluetooth section. You should find a bluetooth device called
-//    PicoW Serial XX:XX:... Click Connect button.
-// 2. A /dev/tty.PicoWSerialXXXX becomes available.
-// 3. Connect to this device with your favorite terminal application.
-
+// This is the initial implementation of Imp's LED Matrix
+// on a HUB75 32x64 LED matrix using a Raspberry Pi Pico
+// Requires the maxgerhardt Arduino core for this
+// project to work in PlatformIO. 
+// We will be using Adafruit's Protomatter library and 
+// their GFX library for this project.
 #include <Arduino.h>
-#include <SerialBT.h>
+#include <Adafruit_Protomatter.h>
+#include <sdios.h>
+#include <string.h>
+#include <SdFat.h> // Adafruit's Fork of SD
 
-void setup() {
-  SerialBT.setName("PicoW UPPERCASE 00:00:00:00:00:00");
-  SerialBT.begin();
-}
+// Error definition library
+#include <ErrorsDefs.h>
 
-void loop() {
-  while (SerialBT) {
-    while (SerialBT.available()) {
-      char c = SerialBT.read();
-      c = toupper(c);
-      SerialBT.write(c);
+// Bitmap reader and display library
+#include <bmpMatrixDisp.h>
+
+// C definitions for the LED matrix and the simulation
+#define matrix_chain_width 64 // total matrix chain width (width of the array)
+#define bit_depth 6 // Number of bit depth of the color plane, higher = greater color fidelity
+#define address_lines_num 4 // Number of address lines of the LED matrix
+#define double_buffered true // Makes animation smother if true, at the cost of twice the RAM usage
+// See Adafruits documentation for more details
+
+// Arrays for the Raspberry Pi pinouts.
+// These are in GP number format, which is different from
+// the silkscreen numbers, please see the picos pinout diagram.
+// Adafruit has wonderful documentation on the pin layout
+// of the LCD matrix.
+// See: https://learn.adafruit.com/32x16-32x32-rgb-led-matrix/connecting-with-jumper-wires
+// NOTE: If you are using the ribbon cable to connect, pins are mirrored relative
+// to their order on the PCB in the Y axis. Please see Adafruit documentation
+// for further details.
+uint8_t rgbPins[]  = {0, 1, 2, 3, 4, 5}; //LED matrix: R1, G1, B1, R2, G2, B2
+uint8_t addrPins[] = {6, 7, 8, 9}; // LED matrix: A,B,C,D
+uint8_t clockPin   = 11; // LED matrix: CLK
+uint8_t latchPin   = 12; // LED matrix: LAT
+uint8_t oePin      = 13; // LED matrix: OE
+uint8_t powerButton = 14; // GPIO of the power button
+uint8_t modeButton = 15; // GPIO of the mode button
+
+// GPIO 26 is unconnected and used as the seed for randomInit()
+
+// SD card variables and instantiation
+// We will be using the FAT16/FAT32 and exFAT class for higher compatibility
+SdFat32  SD;         // SD card filesystem
+File32 file;
+File32 root;
+
+// SD card setup and pin definitions
+// The SD card is connected to the default SPI0 pins (16:?,17:CS,18:?,19:?)
+const uint8_t SD_CS_PIN = 17; // For our board, this is the correct definition 
+#define SD_CONFIG SdSpiConfig(SD_CS_PIN, DEDICATED_SPI, SD_SCK_MHZ(8)) // Can be changed up to 25 Mhz
+
+// For details on the constructor arguments please see:
+// https://learn.adafruit.com/adafruit-matrixportal-m4/protomatter-arduino-library
+Adafruit_Protomatter matrix(
+  matrix_chain_width, bit_depth, 1, rgbPins, 
+  address_lines_num, addrPins, clockPin, latchPin, 
+  oePin, double_buffered);
+
+// Instantiate Bitmap reader class
+bmpImageDisp bmpImageDisplay(SD,false);
+
+// Create a Serial output stream.
+ArduinoOutStream cout(Serial);
+
+// Initial setup
+void setup(void) {
+
+  Serial.begin(9600);
+  pinMode(26,INPUT); // Set unconnected GPIO26 (ADC0) as input for random seed if needed
+  randomSeed(analogRead(26));
+
+  // Peripheral button initialization
+  pinMode(powerButton,INPUT); 
+  pinMode(modeButton,INPUT);
+
+
+  // Initialize protolib (matrix control)
+  ProtomatterStatus status = matrix.begin();
+  Serial.print("Protomatter begin() status: ");
+  Serial.println((int)status);
+  if(status == PROTOMATTER_ERR_PINS) {
+    while(true){
+      Serial.println("RGB and clock pins are not on the same PORT!\n");
+    }
+  }else if(status != PROTOMATTER_OK){
+    while(true){
+      // If we get here, please see:
+      // https://learn.adafruit.com/adafruit-matrixportal-m4/protomatter-arduino-library
+      // for error state definitions and troubleshooting info
+      Serial.println("Error initializing the matrix!");
     }
   }
+
+  // Initialize the SD Card with the config defined earlier
+  if(!SD.begin(SD_CONFIG)) { 
+    Serial.println(F("SD begin() failed"));
+    matrix.println("SD Card Failure!");
+    matrix.show();
+    // See the Adafruit fork of the SD library for error definiions
+    for(;;); // Fatal error, do not continue
+  }
+
+  // Any function that has color must use matrix.color(uint8_t r,g,b) call to obtain a
+  //16-bit integer with the desired color, which is passed as the color argument.
+  matrix.setTextSize(1);
+  matrix.println("Imp's LED Matrix!"); // Default text color is white
+
+  matrix.show();
+  delay(1000);
+
+  //Testing of the SD card functionality
+  if (!SD.exists("Folder1/image.bmp")) {
+    errorShow("Image does not exist",matrix);
+  }else{
+    errorShow("Image exists!",matrix);
+  }
+
+}
+
+// Run forever!
+void loop(void) {
+  cout << F("\nList of files in the SD.\n");
+  SD.ls(LS_R);
+
+  // Open image file and display it
+  if (!file.open("Folder1/image2.bmp", O_READ)) {
+    cout<<"Failed to open image\n";
+  }else{
+    cout << F("Opened Image!!");
+  }
+  file.close();
+
+  bmpImageDisplay.displayImage("Folder1/image2.bmp",matrix);
+
+  delay(2000); 
 }
