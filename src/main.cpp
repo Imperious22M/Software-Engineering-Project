@@ -16,6 +16,9 @@
 // Bitmap reader and display library
 #include <bmpMatrixDisp.h>
 
+// Include the wifi library
+#include <WiFi.h>
+
 // C definitions for the LED matrix and the simulation
 #define matrix_chain_width 64 // total matrix chain width (width of the array)
 #define bit_depth 6 // Number of bit depth of the color plane, higher = greater color fidelity
@@ -115,6 +118,10 @@ void setup(void) {
   matrix.println("Imp's LED Matrix!"); // Default text color is white
 
   matrix.show();
+
+  WiFi.mode(WIFI_AP);
+  WiFi.begin("Test-Pico","test");
+
   delay(1000);
 
 }
@@ -124,6 +131,8 @@ void loop(void) {
   SD.ls(LS_R);
   cout<<"\n";
 
+  // Start a soft WiFi access point
+
   // Open every bitmap image in the "bitmaps" folder
   // Open bitmaps directory
   char strBuffer[100]; // buffer to store file paths
@@ -131,6 +140,7 @@ void loop(void) {
   cout<<strBuffer<<"\n";
   if (!dir.open(strBuffer)){
     errorShow("Bitmap dir didn't open",matrix);
+    // Maybe add a close statement?
   }
   // Go through every bitmap and display it
   while(file.openNext(&dir,O_RDONLY)){
