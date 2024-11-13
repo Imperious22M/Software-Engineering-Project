@@ -16,8 +16,11 @@
 // Bitmap reader and display library
 #include <bmpMatrixDisp.h>
 
-// Include the wifi library
-#include <WiFi.h>
+// Include the wifi library and cyw43 library for running
+// the wifi hardware.
+#include <pico/cyw43_arch.h> // critical that we include this
+#include <SPI.h>
+#include <AsyncWebServer_RP2040W.h>
 
 // C definitions for the LED matrix and the simulation
 #define matrix_chain_width 64 // total matrix chain width (width of the array)
@@ -50,15 +53,39 @@ uint8_t modeButton = 15; // GPIO of the mode button
 SdFat32  SD;         // SD card filesystem
 File32 file;
 File32 dir;
+const uint8_t SD_CS_PIN = 17; // For the our purposes GP 17 is the correct pin
 // File locations to be used for storing files
 String animationsFilePath = "animations";
 String bitmapFilePath =  "bitmaps";
 String jpegsFilepath =  "jpegs";
-
 // SD card setup and pin definitions
 // The SD card is connected to the default SPI0 pins (16:?,17:CS,18:?,19:?)
-const uint8_t SD_CS_PIN = 17; // For our board, this is the correct definition 
 #define SD_CONFIG SdSpiConfig(SD_CS_PIN, DEDICATED_SPI, SD_SCK_MHZ(8)) // Can be changed up to 25 Mhz
+
+// Wifi variable definitions
+// Sets the value of the static IP address of the pico.
+IPAddress gatewayIP(192,168,128,1);
+// Set AsyncServer to serve listen on port 80
+AsyncWebServer    server(80);
+// Set the Buffer size for files sent and read by the async
+// wifi routines
+#define BUFFER_SIZE         64
+// Set the gateway SSID and password (hardcoded for now)
+const char* gatewaySSID = "Imp's Matrix";
+const char* gatewayPassword = "matrix12345";
+// HTML test form for file upload, for now only support bitmaps
+const char uploadPage[] PROGMEM = R"rawliteral(
+<!DOCTYPE html>
+<html>
+  <body>
+    <h2>Upload a File</h2>
+    <form method="POST" action="/bitmaps" enctype="multipart/form-data">
+      <input type="file" name="file" /><br><br>
+      <input type="submit" value="Upload Bitmap">
+    </form>
+  </body>
+</html>
+)rawliteral";
 
 // For details on the constructor arguments please see:
 // https://learn.adafruit.com/adafruit-matrixportal-m4/protomatter-arduino-library
@@ -73,16 +100,105 @@ bmpImageDisp bmpImageDisplay(&SD,false);
 // Create a Serial output stream.
 ArduinoOutStream cout(Serial);
 
+//~~~~~~~~~~ Declaration of WiFi callback functions~~~~~~~~~~~~
+
+// Handles when "/" is requested
+void handleRoot(AsyncWebServerRequest *request)
+{
+  char temp[BUFFER_SIZE];
+	snprintf(temp, BUFFER_SIZE - 1, "Hello from your matrix!");
+	request->send(200, "text/html", uploadPage);
+}
+
+// Handles 404 errors
+void handleNotFound(AsyncWebServerRequest *request)
+{
+	String message = "File Not Found\n\n";
+
+	message += "URI: ";
+	//message += server.uri();
+	message += request->url();
+	message += "\nMethod: ";
+	message += (request->method() == HTTP_GET) ? "GET" : "POST";
+	message += "\nArguments: ";
+	message += request->args();
+	message += "\n";
+	for (uint8_t i = 0; i < request->args(); i++)
+	{
+		message += " " + request->argName(i) + ": " + request->arg(i) + "\n";
+	}
+	request->send(404, "text/plain", message);
+}
+
+// Handles when "/upload" is requested
+// This function is CRITICAL for file upload
+void onUpload(AsyncWebServerRequest *request, String filename, size_t index, uint8_t *data, size_t len, bool final){
+  //Handle upload
+  Serial.println("~~~~");
+  Serial.println(request->url());
+	Serial.println(filename);
+	Serial.println(index);
+	Serial.println(len);
+	Serial.println(final);
+	Serial.println("");
+  Serial.println("~~~~");
+
+  // Folder to store files in
+  String fileFolder = "/";
+
+  File32 file;// = SD.open("/" + filename, O_WRONLY|O_CREAT);
+	//file.close();
+  
+  // Determine which folder the upload needs to go in
+  String requestUrl = String(request->url());
+  if(requestUrl.equals("/"+bitmapFilePath)){
+    fileFolder.concat(bitmapFilePath);
+  }
+  if(requestUrl.equals("/"+animationsFilePath)){
+    fileFolder.concat(animationsFilePath);
+  }
+  if(requestUrl.equals("/"+jpegsFilepath)){
+    fileFolder.concat(jpegsFilepath);
+  }
+  Serial.println(fileFolder);
+  Serial.println(fileFolder+"/"+filename);
+
+	file.open((fileFolder+"/"+filename).c_str(),O_RDWR|O_CREAT);
+	if(file.isOpen()){
+		file.seek(index);
+		file.write(data,len);
+		file.close();
+	}else{
+		file.close();
+		Serial.println("File failed to open");
+		request->send(500,"text/plain","File failed to be opened");
+		return;
+	}
+
+	if(final == true){
+		Serial.println("File finished uploading!");
+		request->send(200,"text/plain","File succesfully uploaded");
+		return;
+	}
+}
+//~~~~~~~~~~~End of WiFI callback functions~~~~~~~~~~~~~~~~~~~~
+
+
+
 // Initial setup
 void setup(void) {
 
+  // Start the serial monitor
   Serial.begin(9600);
-  pinMode(26,INPUT); // Set unconnected GPIO26 (ADC0) as input for random seed if needed
+  
+  // Set unconnected GPIO26 (ADC0) as input for random seed if needed
+  pinMode(26,INPUT); 
   randomSeed(analogRead(26));
 
-  // Peripheral button initialization
-  pinMode(powerButton,INPUT); 
-  pinMode(modeButton,INPUT);
+  // Peripheral button initialization as default high with 
+  // internal pullup resistor
+  pinMode(powerButton,INPUT_PULLUP); 
+  pinMode(modeButton,INPUT_PULLUP);
 
 
   // Initialize protolib (matrix control)
@@ -116,22 +232,46 @@ void setup(void) {
   //16-bit integer with the desired color, which is passed as the color argument.
   matrix.setTextSize(1);
   matrix.println("Imp's LED Matrix!"); // Default text color is white
-
   matrix.show();
 
+  // Initialiaze the pico as a soft wifi access point
+  // and set a static IP for the access point
   WiFi.mode(WIFI_AP);
-  WiFi.begin("Test-Pico","test");
+  // Set the gateway (pico W) IP address
+  // to the static IP specified by getwayIP (192.168.128.1)
+  WiFi.config(gatewayIP);
+  WiFi.begin(gatewaySSID,gatewayPassword);
 
-  delay(1000);
+  // Set WiFi server root ("/") callback
+  server.on("/", HTTP_GET, [](AsyncWebServerRequest * request)
+	{
+		handleRoot(request);
+	});
+
+	// Set WiFi server "/upload" callback
+  // This is the most important callback 
+	server.on("/bitmaps", HTTP_POST, [](AsyncWebServerRequest *request){
+	  request->send(200);
+	 }, onUpload);
+  
+  // Set Wifi server default handler if request address is not found
+	server.onNotFound(handleNotFound);
+
+  // Start listening for connections
+	server.begin();
 
 }
 
 // Run forever!
 void loop(void) {
+
+  // FYI the WiFi server routines are run in the background
+  // no need to poll them here
+  // Same goes for the LED matrix image displaying (protomatter)
+  // routines
+
   SD.ls(LS_R);
   cout<<"\n";
-
-  // Start a soft WiFi access point
 
   // Open every bitmap image in the "bitmaps" folder
   // Open bitmaps directory
