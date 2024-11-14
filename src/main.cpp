@@ -43,8 +43,8 @@ uint8_t addrPins[] = {6, 7, 8, 9}; // LED matrix: A,B,C,D
 uint8_t clockPin   = 11; // LED matrix: CLK
 uint8_t latchPin   = 12; // LED matrix: LAT
 uint8_t oePin      = 13; // LED matrix: OE
-uint8_t powerButton = 14; // GPIO of the power button
-uint8_t modeButton = 15; // GPIO of the mode button
+const uint8_t powerButton = 14; // GPIO of the power button
+const uint8_t modeButton = 15; // GPIO of the mode button
 
 // GPIO 26 is unconnected and used as the seed for randomInit()
 
@@ -200,7 +200,6 @@ void setup(void) {
   pinMode(powerButton,INPUT_PULLUP); 
   pinMode(modeButton,INPUT_PULLUP);
 
-
   // Initialize protolib (matrix control)
   ProtomatterStatus status = matrix.begin();
   Serial.print("Protomatter begin() status: ");
@@ -221,11 +220,13 @@ void setup(void) {
   // Initialize the SD Card with the config defined earlier
   // If we are ever finished with the SD Card use SD.close
   if(!SD.begin(SD_CONFIG)) { 
-    Serial.println(F("SD begin() failed"));
     matrix.println("SD Card Failure!");
     matrix.show();
+    while(true){
+      Serial.println(F("SD begin() failed"));
+      delay(1000);
     // See the Adafruit fork of the SD library for error definiions
-    for(;;); // Fatal error, do not continue
+    }
   }
 
   // Any function that has color must use matrix.color(uint8_t r,g,b) call to obtain a
@@ -298,9 +299,9 @@ void loop(void) {
     cout<<strBuffer<<"\n";
     bmpImageDisplay.displayImage(strBuffer,matrix);
     
-    delay(5000);
+    delay(1000);
   }
   
   dir.close();
-  delay(2000); 
+
 }
