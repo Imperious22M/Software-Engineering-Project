@@ -105,9 +105,23 @@ ArduinoOutStream cout(Serial);
 // Handles when "/" is requested
 void handleRoot(AsyncWebServerRequest *request)
 {
-  char temp[BUFFER_SIZE];
-	snprintf(temp, BUFFER_SIZE - 1, "Hello from your matrix!");
 	request->send(200, "text/html", uploadPage);
+}
+
+// Handles ALL the HTTP API calls for controlling the matrix
+void handleAPIRequests(AsyncWebServerRequest *request){
+
+    int headers = request->headers();
+    int i;
+    for(i=0;i<headers;i++){
+      AsyncWebHeader* h = request->getHeader(i);
+      Serial.printf("HEADER[%s]: %s\n", h->name().c_str(), h->value().c_str());
+    }
+    // Filter out GET requests (data being sent to client)
+    if(request->method() == WebRequestMethod::HTTP_GET){
+      request->send(200,"text/plain","Matrix API!");
+    }
+
 }
 
 // Handles 404 errors
@@ -255,6 +269,10 @@ void setup(void) {
 	  request->send(200);
 	 }, onUpload);
   
+  server.on("/API", HTTP_POST,handleAPIRequests);
+  server.on("/API", HTTP_PUT,handleAPIRequests);
+  server.on("/API", HTTP_GET,handleAPIRequests);
+
   // Set Wifi server default handler if request address is not found
 	server.onNotFound(handleNotFound);
 
