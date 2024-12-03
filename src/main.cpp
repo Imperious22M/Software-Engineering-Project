@@ -111,6 +111,7 @@ void handleRoot(AsyncWebServerRequest *request)
 // Handles ALL the HTTP API calls for controlling the matrix
 void handleAPIRequests(AsyncWebServerRequest *request){
 
+    // Print headers of the request temporarely
     int headers = request->headers();
     int i;
     for(i=0;i<headers;i++){
@@ -289,14 +290,14 @@ void loop(void) {
   // Same goes for the LED matrix image displaying (protomatter)
   // routines
 
-  SD.ls(LS_R);
-  cout<<"\n";
+  //SD.ls(LS_R);
+  //cout<<"\n";
 
   // Open every bitmap image in the "bitmaps" folder
   // Open bitmaps directory
   char strBuffer[100]; // buffer to store file paths
   bitmapFilePath.toCharArray(strBuffer,100);
-  cout<<strBuffer<<"\n";
+  //cout<<strBuffer<<"\n";
   if (!dir.open(strBuffer)){
     errorShow("Bitmap dir didn't open",matrix);
     // Maybe add a close statement?
@@ -314,7 +315,7 @@ void loop(void) {
 
     file.close();
     path.toCharArray(strBuffer,100);
-    cout<<strBuffer<<"\n";
+    //cout<<strBuffer<<"\n";
     bmpImageDisplay.displayImage(strBuffer,matrix);
     
     delay(1000);
