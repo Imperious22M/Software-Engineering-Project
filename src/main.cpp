@@ -45,12 +45,17 @@ uint8_t latchPin   = 12; // LED matrix: LAT
 uint8_t oePin      = 13; // LED matrix: OE
 const uint8_t powerButton = 14; // GPIO of the power button
 const uint8_t modeButton = 15; // GPIO of the mode button
-
 // GPIO 26 is unconnected and used as the seed for randomInit()
+
+// Definition of control settings for the LED matrix
+String matrixId = "IMP0001"; // Unique string identifier for the matrix
+uint8_t matrixBrigthness = 50; // should only be from 0 to 255 inclusive
+uint8_t matrixMode = 1; // int representation of the current mode, 1:bitmap,2:animation,3:simulation
+
 
 // SD card variables and instantiation
 // We will be using the FAT16/FAT32 and exFAT class for higher compatibility
-SdFat32  SD;         // SD card filesystem
+SdFat32 SD;         // SD card filesystem
 File32 file;
 File32 dir;
 const uint8_t SD_CS_PIN = 17; // For the our purposes GP 17 is the correct pin
@@ -100,6 +105,16 @@ bmpImageDisp bmpImageDisplay(&SD,false);
 // Create a Serial output stream.
 ArduinoOutStream cout(Serial);
 
+//~~~~~~~~~~ Wifi Server Helper Functions~~~~~~~~~~~~~~~~~~~~~
+void printHttpHeaders(AsyncWebServerRequest *request){
+    int headers = request->headers();
+    int i;
+    for(i=0;i<headers;i++){
+      AsyncWebHeader* h = request->getHeader(i);
+      Serial.printf("HEADER[%s]: %s\n", h->name().c_str(), h->value().c_str());
+    }
+}
+
 //~~~~~~~~~~ Declaration of WiFi callback functions~~~~~~~~~~~~
 
 // Handles when "/" is requested
@@ -109,18 +124,15 @@ void handleRoot(AsyncWebServerRequest *request)
 }
 
 // Handles ALL the HTTP API calls for controlling the matrix
-void handleAPIRequests(AsyncWebServerRequest *request){
-
-    // Print headers of the request temporarely
-    int headers = request->headers();
-    int i;
-    for(i=0;i<headers;i++){
-      AsyncWebHeader* h = request->getHeader(i);
-      Serial.printf("HEADER[%s]: %s\n", h->name().c_str(), h->value().c_str());
-    }
+void handleAPIMatrixId(AsyncWebServerRequest *request){
+    
+    // print out headers
+    printHttpHeaders(request);
     // Filter out GET requests (data being sent to client)
     if(request->method() == WebRequestMethod::HTTP_GET){
-      request->send(200,"text/plain","Matrix API!");
+      char strBuff[50];
+      matrixId.toCharArray(strBuff,50);
+      request->send(200,"text/plain",strBuff);
     }
 
 }
@@ -269,10 +281,11 @@ void setup(void) {
 	server.on("/bitmaps", HTTP_POST, [](AsyncWebServerRequest *request){
 	  request->send(200);
 	 }, onUpload);
-  
-  server.on("/API", HTTP_POST,handleAPIRequests);
-  server.on("/API", HTTP_PUT,handleAPIRequests);
-  server.on("/API", HTTP_GET,handleAPIRequests);
+
+  // Set all HTTP URL API callbacks 
+  server.on("/API/id", HTTP_GET,handleAPIMatrixId);
+  //server.on("/API", HTTP_PUT,handleAPIRequests);
+  //server.on("/API", HTTP_GET,handleAPIRequests);
 
   // Set Wifi server default handler if request address is not found
 	server.onNotFound(handleNotFound);
@@ -290,8 +303,8 @@ void loop(void) {
   // Same goes for the LED matrix image displaying (protomatter)
   // routines
 
-  //SD.ls(LS_R);
-  //cout<<"\n";
+  SD.ls(LS_R);
+  cout<<"\n";
 
   // Open every bitmap image in the "bitmaps" folder
   // Open bitmaps directory
@@ -300,7 +313,7 @@ void loop(void) {
   //cout<<strBuffer<<"\n";
   if (!dir.open(strBuffer)){
     errorShow("Bitmap dir didn't open",matrix);
-    // Maybe add a close statement?
+    dir.close(); // close in case there is a floating file resource
   }
   // Go through every bitmap and display it
   while(file.openNext(&dir,O_RDONLY)){
@@ -316,9 +329,9 @@ void loop(void) {
     file.close();
     path.toCharArray(strBuffer,100);
     //cout<<strBuffer<<"\n";
-    bmpImageDisplay.displayImage(strBuffer,matrix);
+    bmpImageDisplay.displayImage(strBuffer,matrix,matrixBrigthness);
     
-    delay(1000);
+    delay(5000);
   }
   
   dir.close();

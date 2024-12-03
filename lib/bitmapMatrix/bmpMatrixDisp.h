@@ -77,12 +77,13 @@ class bmpImageDisp{
     SdFat32 *SDCard; // The filesystem of the SD Card
     File32 image;  // Bitmap file to open and display
     char buffer[100]; // Buffer to store messages to be printed out
-    bool debugFlg  = false;
+    bool debugFlg  = false; // debug flag, for development only
+    const uint8_t maxBrightness = 255; // max brightness of the LED matrix
 
   public: 
     bmpImageDisp(SdFat32 *SDOpen, bool debugFlg_in);
     bool imageExists(char *imgPath);
-    int displayImage(char *imgPath,Adafruit_Protomatter &matrix);
+    int displayImage(char *imgPath,Adafruit_Protomatter &matrix, uint8_t brightness);
 
 };
 
@@ -103,7 +104,11 @@ bool bmpImageDisp::imageExists(char *imgPath){
 // Reads the image passed and displays it on the protomatter matrix passed.
 // Can read bitmap images that have a bit depth of 24 and 8 bits, bitfield 
 // encoded for the 24 bit images and RLE encoded for the 8 bit images.
-int bmpImageDisp::displayImage(char *imgPath,Adafruit_Protomatter &matrix){
+int bmpImageDisp::displayImage(char *imgPath,Adafruit_Protomatter &matrix, uint8_t brightness){
+  // Calculate brightness modifier
+  const float brightnessModifier = ((float)brightness)/maxBrightness; 
+  Serial.print("brightness: ");
+  Serial.println(brightnessModifier);
 
   // Check if the file exists
   if(!imageExists(imgPath)){
@@ -170,11 +175,13 @@ int bmpImageDisp::displayImage(char *imgPath,Adafruit_Protomatter &matrix){
           //sprintf(buffer,"Alpha: %x red: %x green: %x blue: %x \n",bpp32Format.fields.alpha,bpp32Format.fields.red,
           //                              bpp32Format.fields.green,bpp32Format.fields.blue);
           //cout<<buffer;
-          matrix.drawPixel(x,y,matrix.color565(bpp32Format.fields.red,bpp32Format.fields.green,bpp32Format.fields.blue));
+          matrix.drawPixel(x,y,matrix.color565((uint8_t)bpp32Format.fields.red*brightnessModifier,
+                          (uint8_t)bpp32Format.fields.green*brightnessModifier,
+                          (uint8_t)bpp32Format.fields.blue*brightnessModifier));
         }
     }
   } else if(bmpFile.bitsPerPixel==8 && bmpFile.compression==1){
-      // Implementation of 8 bit pixel depth, 8 bit rle compression
+      // Implementation of 8 bit pixel depth, 8 bit RLE compression
       // No field masks based on spec!
       //cout<<"implementation of rle\n";
       // Color table offset includes the size of the bitmap file headr (14 bytes)
@@ -237,7 +244,10 @@ int bmpImageDisp::displayImage(char *imgPath,Adafruit_Protomatter &matrix){
          uint8_t reps = rle8BitEntry.fields.reps;
          uint8_t index = rle8BitEntry.fields.index;
          for(int x=0;x<reps;x++){
-            matrix.drawPixel(x_cord,y_cord,matrix.color565(colorTable[index].fields.red,colorTable[index].fields.green,colorTable[index].fields.blue));
+            matrix.drawPixel(x_cord,y_cord,matrix.color565(
+                            (uint8_t)colorTable[index].fields.red*brightnessModifier,
+                            (uint8_t)colorTable[index].fields.green*brightnessModifier,
+                            (uint8_t)colorTable[index].fields.blue*brightnessModifier));
             x_cord++;
             if(x_cord==bmpFile.imageWidth){
               x_cord=0;
