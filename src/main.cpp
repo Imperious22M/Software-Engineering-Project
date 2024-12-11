@@ -96,6 +96,11 @@ const char uploadPage[] PROGMEM = R"rawliteral(
 </html>
 )rawliteral";
 
+// Variables to control the image slideshow
+// Controls the delay between images of the slideshow
+int slideShowDelay = 1000;
+
+
 // For details on the constructor arguments please see:
 // https://learn.adafruit.com/adafruit-matrixportal-m4/protomatter-arduino-library
 Adafruit_Protomatter matrix(
@@ -154,6 +159,8 @@ void handleAPIMatrixBrightness(AsyncWebServerRequest *request){
     // Filter out PUT requests (data being sent to the matrix. aka the 'server')
     if(request->method() == WebRequestMethod::HTTP_PUT){
       char strBuff[50];
+      // The PUT request must have a header named "Brightness" that 
+      // contains the brightness value of the LED from 0 to 255
       const char* headerName = "Brightness";
       if(request->hasHeader(headerName)){
         Serial.println(request->getHeader(headerName)->toString());
@@ -177,6 +184,99 @@ void handleAPIMatrixBrightness(AsyncWebServerRequest *request){
       request->send(200,"text/plain",strBuff);
     }
 
+}
+
+// Handles the API call for the slideshow delay
+// Simple callback that reads a header with the slideshow value
+void handleAPIMatrixSlideShowDelay(AsyncWebServerRequest *request){
+    // Filter out GET requests (data being sent to client)
+    // Respond with the current slidehow delay if a
+    // get request is sent
+    if(request->method() == WebRequestMethod::HTTP_GET){
+      char strBuff[50];
+      snprintf(strBuff,50,"%i",slideShowDelay);
+      request->send(200,"text/plain",strBuff);
+      return; 
+    }
+    // Filter out PUT requests (data being sent to the matrix. aka the 'server')
+    if(request->method() == WebRequestMethod::HTTP_PUT){
+      char strBuff[50];
+      // The PUT request must have a header named "Brightness" that 
+      // contains the brightness value of the LED in milliseconds
+      // up to 5 digits
+      const char* headerName = "Delay";
+      if(request->hasHeader(headerName)){
+        Serial.println(request->getHeader(headerName)->toString());
+        if(request->header(headerName).length()>5){
+          snprintf(strBuff,50,"Delay too large");
+          request->send(400,"text/plain",strBuff);
+          return;
+        }
+        int tempDelay = atoi(request->header("Delay").c_str());
+        if(tempDelay<0){
+          snprintf(strBuff,50,"Illegal delay value");
+          request->send(400,"text/plain",strBuff);
+          return;
+        }
+        
+        // Set all delay values here
+        slideShowDelay = tempDelay;
+      }
+      snprintf(strBuff,50,"%i",slideShowDelay);
+      request->send(200,"text/plain",strBuff);
+    }
+
+}
+// Handles the API callback to delete all images in the animation
+// folder in the SD card
+// It does this by deleting the entire folder and making a new one
+void handleAPIDeleteBitmaps(AsyncWebServerRequest *request){
+  // Just making the GET request is sufficient to trigger the 
+  // file deletion
+  if(request->method() == WebRequestMethod::HTTP_GET){
+    
+    // Remove the bitmap folder
+    file.close();
+    dir.close();
+
+    //deleteBitmapFolder = true;
+    File32 dirBmp;
+    File32 fileEntry;
+    char strBuffer[100]; // buffer to store file paths
+    bitmapFilePath.toCharArray(strBuffer,100);
+
+    cout<<strBuffer;
+    // Open the folder to be deleted to delete every file in it
+    if(!dirBmp.open(strBuffer,O_READ)){
+      request->send(500,"text/plain","bitmap folder could not be opened!");
+      dirBmp.close(); // close in case there is a floating file resource
+      return;
+    }
+    // Delete every file in the folder
+    while(fileEntry.openNext(&dirBmp,O_READ)){
+      // Get the file path name
+      fileEntry.getName(strBuffer,100);
+      String path = bitmapFilePath+"/"+strBuffer;
+      // skip subdirectories
+      if(fileEntry.isDir()){
+        fileEntry.close();
+        continue;
+      }
+      // Delete the file
+      path.toCharArray(strBuffer,100);
+      cout<<strBuffer;
+      if (!SD.remove(strBuffer)){
+        request->send(500,"text/plain","Bitmap folder could not be cleared!");
+        fileEntry.close();
+        dirBmp.close(); // close in case there is a floating file resource
+        return;
+      }
+      fileEntry.close();
+    }
+    dirBmp.close();
+    // Send response to the app
+    request->send(200,"text/plain","Bitmap folder is cleared!");
+  }
 }
 
 // Handles 404 errors
@@ -332,7 +432,9 @@ void setup(void) {
   server.on("/API/id", HTTP_GET,handleAPIMatrixId);
   server.on("/API/brightness", HTTP_GET,handleAPIMatrixBrightness);
   server.on("/API/brightness", HTTP_PUT,handleAPIMatrixBrightness);
-  //server.on("/API", HTTP_GET,handleAPIRequests);
+  server.on("/API/delete/bitmaps", HTTP_GET,handleAPIDeleteBitmaps);
+  server.on("/API/slideshowdelay", HTTP_GET,handleAPIMatrixSlideShowDelay);
+  server.on("/API/slideshowdelay", HTTP_PUT,handleAPIMatrixSlideShowDelay);
 
   // Set Wifi server default handler if request address is not found
 	server.onNotFound(handleNotFound);
@@ -374,18 +476,15 @@ void loop(void) {
       file.close();
       break;
     }
-
     file.close();
     path.toCharArray(strBuffer,100);
     //cout<<strBuffer<<"\n";
     bmpImageDisplay.displayImage(strBuffer,matrix);
-
-    delay(1000);
-    
+    delay(slideShowDelay);
   }
 
-  dir.close();
-  
+  // delete all files in the folder if the delete flag is
 
+  dir.close();
 
 }
