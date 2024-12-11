@@ -70,8 +70,9 @@ typedef union bpp8Format {
   
 } bpp8Format;
 
-// Class representing the image reader
+// Class representing a reader for the bitmap image
 // The SD card MUST be initialized before instantiating this class
+// This class draws a single bitmap image into the LED Matrix
 class bmpImageDisp{
   private:
     SdFat32 *SDCard; // The filesystem of the SD Card
@@ -79,11 +80,15 @@ class bmpImageDisp{
     char buffer[100]; // Buffer to store messages to be printed out
     bool debugFlg  = false; // debug flag, for development only
     const uint8_t maxBrightness = 255; // max brightness of the LED matrix
+    uint8_t matrixBrightness= 125; // Stores the current brightness setting by default the brightness is set to about half
+    char* currentImgPath; // Setting to store the current image path that is being drawn, used in case of brightness change
+    Adafruit_Protomatter* currentMatrix; // Same purpose as above, but stores reference to the protomatter object
 
   public: 
     bmpImageDisp(SdFat32 *SDOpen, bool debugFlg_in);
     bool imageExists(char *imgPath);
-    int displayImage(char *imgPath,Adafruit_Protomatter &matrix, uint8_t brightness);
+    void setBrightness(uint8_t brightness);
+    int displayImage(char *imgPath,Adafruit_Protomatter &matrix);
 
 };
 
@@ -101,12 +106,25 @@ bool bmpImageDisp::imageExists(char *imgPath){
   return true;
 }
 
+// Set the brightness of the pixels shown. 
+// upon a calling this, the image is redrawn completely
+void bmpImageDisp::setBrightness(uint8_t brightness){
+  matrixBrightness = brightness;
+  // Redraw the image currently shown using the new brightness
+  displayImage(currentImgPath,*currentMatrix);
+}
+
 // Reads the image passed and displays it on the protomatter matrix passed.
-// Can read bitmap images that have a bit depth of 24 and 8 bits, bitfield 
+// Can read bitmap images that have a bit depth of 32 and 8 bits, bitfield 
 // encoded for the 24 bit images and RLE encoded for the 8 bit images.
-int bmpImageDisp::displayImage(char *imgPath,Adafruit_Protomatter &matrix, uint8_t brightness){
+int bmpImageDisp::displayImage(char *imgPath,Adafruit_Protomatter &matrix){
+
+  // Save the parameters for 
+  currentImgPath = imgPath;
+  currentMatrix = &matrix;
+  
   // Calculate brightness modifier
-  const float brightnessModifier = ((float)brightness)/maxBrightness; 
+  const float brightnessModifier = ((float)matrixBrightness)/maxBrightness; 
   Serial.print("brightness: ");
   Serial.println(brightnessModifier);
 
@@ -175,6 +193,7 @@ int bmpImageDisp::displayImage(char *imgPath,Adafruit_Protomatter &matrix, uint8
           //sprintf(buffer,"Alpha: %x red: %x green: %x blue: %x \n",bpp32Format.fields.alpha,bpp32Format.fields.red,
           //                              bpp32Format.fields.green,bpp32Format.fields.blue);
           //cout<<buffer;
+
           matrix.drawPixel(x,y,matrix.color565((uint8_t)bpp32Format.fields.red*brightnessModifier,
                           (uint8_t)bpp32Format.fields.green*brightnessModifier,
                           (uint8_t)bpp32Format.fields.blue*brightnessModifier));
@@ -266,7 +285,7 @@ int bmpImageDisp::displayImage(char *imgPath,Adafruit_Protomatter &matrix, uint8
       }
   
   } else {
-      errorShow("bpp not supported!",matrix);
+      errorShow("bpp not supported!",matrix,matrixBrightness);
   }
 
   image.close();
