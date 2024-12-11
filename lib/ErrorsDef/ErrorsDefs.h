@@ -4,3 +4,4 @@
 #include <Adafruit_Protomatter.h>
 
 void errorShow(const char* msg, Adafruit_Protomatter &matrix);
+void errorShow(const char* msg, Adafruit_Protomatter &matrix,uint8_t brightness);
