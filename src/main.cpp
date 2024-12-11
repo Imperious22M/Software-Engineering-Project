@@ -22,6 +22,9 @@
 #include <SPI.h>
 #include <AsyncWebServer_RP2040W.h>
 
+// Include the settings maager helper class to help save/retrive settings
+#include <settingsManager.h>
+
 // C definitions for the LED matrix and the simulation
 #define matrix_chain_width 64 // total matrix chain width (width of the array)
 #define bit_depth 6 // Number of bit depth of the color plane, higher = greater color fidelity
@@ -49,8 +52,9 @@ const uint8_t modeButton = 15; // GPIO of the mode button
 
 // Definition of control settings for the LED matrix
 String matrixId = "IMP0001"; // Unique string identifier for the matrix
-uint8_t matrixBrigthness = 50; // should only be from 0 to 255 inclusive
-uint8_t matrixMode = 1; // int representation of the current mode, 1:bitmap,2:animation,3:simulation
+const int maxBrightness = 255;
+volatile uint8_t matrixBrigthness = 50; // should only be from 0 to 255 inclusive
+volatile uint8_t matrixMode = 1; // int representation of the current mode, 1:bitmap,2:animation,3:simulation
 
 
 // SD card variables and instantiation
@@ -65,7 +69,7 @@ String bitmapFilePath =  "bitmaps";
 String jpegsFilepath =  "jpegs";
 // SD card setup and pin definitions
 // The SD card is connected to the default SPI0 pins (16:?,17:CS,18:?,19:?)
-#define SD_CONFIG SdSpiConfig(SD_CS_PIN, DEDICATED_SPI, SD_SCK_MHZ(8)) // Can be changed up to 25 Mhz
+#define SD_CONFIG SdSpiConfig(SD_CS_PIN, DEDICATED_SPI, SD_SCK_MHZ(16)) // Can be changed up to 25 Mhz
 
 // Wifi variable definitions
 // Sets the value of the static IP address of the pico.
@@ -105,6 +109,9 @@ bmpImageDisp bmpImageDisplay(&SD,false);
 // Create a Serial output stream.
 ArduinoOutStream cout(Serial);
 
+// Create the settings manager class
+settingsManager settingsFile;
+
 //~~~~~~~~~~ Wifi Server Helper Functions~~~~~~~~~~~~~~~~~~~~~
 void printHttpHeaders(AsyncWebServerRequest *request){
     int headers = request->headers();
@@ -123,15 +130,50 @@ void handleRoot(AsyncWebServerRequest *request)
 	request->send(200, "text/html", uploadPage);
 }
 
-// Handles ALL the HTTP API calls for controlling the matrix
+// Handles the API call for ID
 void handleAPIMatrixId(AsyncWebServerRequest *request){
-    
-    // print out headers
-    printHttpHeaders(request);
     // Filter out GET requests (data being sent to client)
     if(request->method() == WebRequestMethod::HTTP_GET){
       char strBuff[50];
       matrixId.toCharArray(strBuff,50);
+      request->send(200,"text/plain",strBuff);
+    }
+
+}
+    
+// Handles the API call for brightness
+// Calls all necesarry functions that affect brightness (essentially this is a brigthness callback)
+void handleAPIMatrixBrightness(AsyncWebServerRequest *request){
+    // Filter out GET requests (data being sent to client)
+    if(request->method() == WebRequestMethod::HTTP_GET){
+      char strBuff[50];
+      snprintf(strBuff,50,"%i",matrixBrigthness);
+      request->send(200,"text/plain",strBuff);
+      return; 
+    }
+    // Filter out PUT requests (data being sent to the matrix. aka the 'server')
+    if(request->method() == WebRequestMethod::HTTP_PUT){
+      char strBuff[50];
+      const char* headerName = "Brightness";
+      if(request->hasHeader(headerName)){
+        Serial.println(request->getHeader(headerName)->toString());
+        if(request->header(headerName).length()>3){
+          snprintf(strBuff,50,"Brightness too large");
+          request->send(400,"text/plain",strBuff);
+          return;
+        }
+        int tempBrigthness = atoi(request->header("Brightness").c_str());
+        if(tempBrigthness>maxBrightness || tempBrigthness<0){
+          snprintf(strBuff,50,"Illegal brightness value");
+          request->send(400,"text/plain",strBuff);
+          return;
+        }
+        
+        // Set all the brightness settings here
+        matrixBrigthness = tempBrigthness;
+        bmpImageDisplay.setBrightness(matrixBrigthness);
+      }
+      snprintf(strBuff,50,"%i",matrixBrigthness);
       request->send(200,"text/plain",strBuff);
     }
 
@@ -256,6 +298,10 @@ void setup(void) {
     }
   }
 
+  // Get the saved settings from the matrix
+  settingsFile.createSettingsFile("settings.txt","");
+  //settingsFile.saveBrightness(matrixBrigthness);
+
   // Any function that has color must use matrix.color(uint8_t r,g,b) call to obtain a
   //16-bit integer with the desired color, which is passed as the color argument.
   matrix.setTextSize(1);
@@ -266,7 +312,7 @@ void setup(void) {
   // and set a static IP for the access point
   WiFi.mode(WIFI_AP);
   // Set the gateway (pico W) IP address
-  // to the static IP specified by getwayIP (192.168.128.1)
+  // to the static IP specified by getewayIP (192.168.128.1)
   WiFi.config(gatewayIP);
   WiFi.begin(gatewaySSID,gatewayPassword);
 
@@ -284,7 +330,8 @@ void setup(void) {
 
   // Set all HTTP URL API callbacks 
   server.on("/API/id", HTTP_GET,handleAPIMatrixId);
-  //server.on("/API", HTTP_PUT,handleAPIRequests);
+  server.on("/API/brightness", HTTP_GET,handleAPIMatrixBrightness);
+  server.on("/API/brightness", HTTP_PUT,handleAPIMatrixBrightness);
   //server.on("/API", HTTP_GET,handleAPIRequests);
 
   // Set Wifi server default handler if request address is not found
@@ -305,17 +352,19 @@ void loop(void) {
 
   SD.ls(LS_R);
   cout<<"\n";
-
+  
   // Open every bitmap image in the "bitmaps" folder
   // Open bitmaps directory
   char strBuffer[100]; // buffer to store file paths
   bitmapFilePath.toCharArray(strBuffer,100);
-  //cout<<strBuffer<<"\n";
+  cout<<strBuffer<<"\n";
   if (!dir.open(strBuffer)){
     errorShow("Bitmap dir didn't open",matrix);
     dir.close(); // close in case there is a floating file resource
   }
   // Go through every bitmap and display it
+  matrixMode = 1;
+
   while(file.openNext(&dir,O_RDONLY)){
     // Get the file path name
     file.getName(strBuffer,100);
@@ -329,11 +378,14 @@ void loop(void) {
     file.close();
     path.toCharArray(strBuffer,100);
     //cout<<strBuffer<<"\n";
-    bmpImageDisplay.displayImage(strBuffer,matrix,matrixBrigthness);
+    bmpImageDisplay.displayImage(strBuffer,matrix);
+
+    delay(1000);
     
-    delay(5000);
   }
-  
+
   dir.close();
+  
+
 
 }
